@@ -1,0 +1,455 @@
+---
+title: "Coronavirus Daily Analysis"
+author: "Laura Rivera Sanchez (laurivsan)"
+output:
+  html_document:
+    toc: yes
+  word_document:
+    toc: yes
+  pdf_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load_libraries, include=FALSE}
+library(knitr)
+
+library(httpuv)
+library(dplyr)
+library(tm)
+library(syuzhet) #sentiment 
+#library(qdap)
+#library(textstem)
+library(udpipe) #lemmatization 
+#library(Unicode)
+library(igraph)
+#library(tm)
+#library(text2vec)
+
+library(jsonlite) #read verba json from url
+
+library(quanteda) #topic
+library(stringi) #used to convert unicode character to readable ones.
+
+#library(textclean) #clean special characters
+
+library(data.table)
+```
+
+
+# 0 Lectura de Twitter
+
+
+
+```{r chunck1}
+
+#GLOBAL SETS
+#set locale to spanish:
+Sys.setlocale(locale="es_ES.UTF-8")
+
+#Global dataframe with ALL the relevant tweets of the month.
+global_data <- data.frame()
+
+#Global dataframe with ALL Twitter topics by day:
+twitter_topics_15 <- data.frame() #top 15
+twitter_topics_100 <- data.frame()  #top 100
+twitter_topics_100_lem <- data.frame()  #top 100
+
+#empty dataframe to add Telediario topics.
+verba_topics_15 <- data.frame() 
+verba_topics_100 <- data.frame() 
+verba_topics_100_lem <- data.frame() 
+
+#Prepare and load UDPI model to be called in function lemmatizateText:
+udpipemodel <- udpipe_download_model(language = "spanish")
+udpipemodel <- udpipe_load_model(file = udpipemodel$file_model)
+```
+
+```{r chunck2}
+#TEXT FUNCTIONS:
+
+replaceTilde <- function (text){
+        text<- gsub("<u+00e1>", "a", text)
+        text<- gsub("\u00E1", "a", text)
+        text<- gsub("á", "a", text)
+        text<- gsub("<u+00e9>", "e", text)
+        text<- gsub("\u00E9", "e", text)
+        text<- gsub("é", "e", text)
+        text<- gsub("<u+00ed>", "i", text)
+        text<- gsub("\u00ED", "i", text)
+        text<- gsub("í", "i", text)
+        text<- gsub("<u+00f3>", "o", text)
+        text<- gsub("\u00F3", "o", text)
+        text<- gsub("ó", "o", text)
+        text<- gsub("<u+00fa>", "u",text)
+        text<- gsub("\u00FA", "u", text)
+        text<- gsub("ú", "u", text)
+        text<- gsub("<u+00f1>", "n", text)
+        text<- gsub("\u00F1", "n", text)
+        text<- gsub("ñ", "n", text)
+       
+    
+   
+    return (text)
+}
+#clean text
+parseText <- function(text){
+ # text <- gsub("[^\x01-\x7F]", "", text) #remove emoticons
+  text <- tolower(text) #convert all text to lower case
+  text<-replaceTilde(text)
+  #text <- sub("rt.*:", "", text) #delete initial RT
+  #text <- gsub("#\\w+", "", text) #delete # hashtag
+  text <- gsub("@\\w+", "", text) # Remove any mentions @UserName
+  text <- gsub("http.*\\s*", "", text) #Remove links
+  text <- gsub("[ |\t]{2,}", " ", text) #remove tabs
+  text <- gsub("[ |\n]{2,}", " ", text) #remove tabs
+  text <- gsub("[^\x01-\x7F]", "", text) #remove emoticons
+  text <- gsub("[\\$,]", "", text) #remove dollar
+  
+  text <- gsub("[[:digit:]]", "", text) # remove digits
+  text <- gsub("[[:punct:]]", "", text) # Remove punctuation
+  
+  
+  
+  return(text)
+  
+}
+
+#Extract lemma from the text (lemmatization)
+lemmatizateText <- function (text)
+{
+  x <- udpipe_annotate(udpipemodel, x = text)
+  x <- as.data.frame(x)
+  lemma<- paste(x$lemma,collapse=" ")
+  return(lemma)
+}
+```
+
+```{r chunck3}
+#TOPIC MODELING FUNCTIONS:
+
+
+getTopNTopics<-function(txts, date,  filter){
+    print("toptopics")
+    print(date)
+    remove_words<- c("fcc","na")
+    #using quanteda
+    my_dfm <- dfm(txts, remove= c(stopwords("spanish"), remove_words), remove_punct = TRUE)
+    
+    #all_words<-convert(my_dfm, as="data.frame")
+
+    #top20<-data.frame(matrix(ncol=2, nrow=1),stringsAsFactors=FALSE)
+    #top20 <- as.data.frame(topfeatures(my_dfm, 20),col.names = c('word', 'count'))
+    #top <- as.data.frame(textstat_frequency(my_dfm,col.names = c('word', 'count')))
+    #convert to dataframe and get top "num" features
+   
+    top <- as.data.frame(topfeatures(my_dfm,300,decreasing = TRUE),col.names = c('word', 'count'))
+    #top15 <- as.data.frame(topfeatures(my_dfm,100,decreasing = TRUE),col.names = c('word', 'count'))
+    setDT(top, keep.rownames = "word")[]
+    
+    colnames(top)<- c("word","count") #change columns names
+    top$percent <- (top$count/length(txts))*100 #percentage of times word used
+    top$date<-date #adding date
+    top$filter<-filter #adding filter (twitter or verba)
+   
+    return (top)
+
+}
+```
+
+```{r chunck4}
+
+#BINDING AND SAVE FILES FUNCTIONS:
+
+#Gets all .csv files from the directories (days), bind the rows, delete duplicate tweets and get a subset of the wanted columns:
+bindAndDeleteDuplicatedTweets<- function(dayToLoad){
+    
+    data = data.frame()
+  
+    filenames = list.files(path = dayToLoad, pattern="*.csv", full.names = TRUE, ignore.case = TRUE ) 
+  
+    length(filenames)
+
+    for (filename in filenames) {
+      file = read.csv(file = filename, stringsAsFactors = FALSE)
+      data = rbind(data, file)
+    }
+  
+  #Delete duplicates:
+  data=data[!duplicated(data$status_id), ]
+  print(dim(data))
+    
+  #get only needed columns:
+  data = subset(data, select=c("status_id", "text", "user_id", "screen_name", "followers_count",
+                               "is_retweet", "retweet_count", "retweet_status_id", "retweet_text","retweet_user_id", "retweet_screen_name", "retweet_retweet_count",
+                               "mentions_user_id", "mentions_screen_name",
+                               "media_type", "media_url", "urls_url", "created_at" ))
+  
+  return(data)
+  
+}
+
+#Saves a dataframe result with the parameter name as a filename
+saveCSV<-function(result, name)
+{
+    #Save data information into computer file:
+  filen<-paste(name, ".csv", sep = "")
+ 
+
+  con<-file(filen)
+  write.csv(result, file=con, row.names = TRUE)
+}
+
+#collects all daily relevants tweets into one unique file
+bindFinalTwitterResult<-function()
+{
+  finaldata = data.frame()
+  filenames = list.files(pattern="*.csv", ignore.case = TRUE )
+  
+    length(filenames)
+
+    for (filename in filenames) {
+      print(filename)
+      f = read.csv(file = filename, stringsAsFactors = FALSE)
+
+      finaldata = rbind(finaldata, f)
+      unlink(filename)
+    }
+    saveCSV(finaldata,"twitter_data")
+}
+
+#Gets both Verba and Twitter results to create a unique data frame to facilitate
+#visualization
+bindVerbaTwitterSentiment<-function()
+{
+  uniquedata = data.frame()
+  f1 = read.csv(file = "verba_data.csv", stringsAsFactors = FALSE)
+  f2 = read.csv(file = "twitter_data.csv", stringsAsFactors = FALSE)
+  f1 <- subset(f1, select=c("date", "id", "title", "polarity" ))
+  f1$type<-"verba"
+  print(head(f1))
+  #Falta coger solo los 5 top indegree (TODO)
+  f2 <- subset(f2, select=c("created_at", "status_id", "retweet_screen_name", "polarity" ))
+  colnames(f2)<-c("date", "id", "title", "polarity")
+  f2$type<-"twitter"
+  print(head(f2))
+  
+  uniquedata = rbind(uniquedata, f1) #add verba data
+  
+  
+  
+  uniquedata = rbind(uniquedata, f2) #add twitter data
+  
+  saveCSV(uniquedata,"sentiment_analysis")
+  
+}
+
+
+
+#Include all transformation needed to apply to releveant tweets.
+transformFields <- function (data)
+{
+  #data$text <- replace_non_ascii(data$text, remove.nonconverted = FALSE)
+  data$text <-as.character(parse(text=shQuote(gsub("<U\\+([A-Z0-9]+)>", "\\\\u\\1", data$text))))
+  data$text.clean <- parseText(data$text)#removeWords(parseText(data$text), stopwords("spanish"))
+  data$text.lem <-unlist(lapply(data$text.clean, lemmatizateText))
+  data <- getSentimentSyuzhet(data)
+  data$created_at <- as.POSIXct(data$created_at, format = "%Y-%m-%d")
+  
+  
+  return(data)
+}
+
+getSentimentSyuzhet <- function (data)
+{
+  data$polarity<-get_sentiment(data$text.lem, language = "spanish")
+  data$sentiment<-get_nrc_sentiment(data$text.lem, language = "spanish")
+  return(data)
+}
+
+```
+
+```{r chunck5}
+#RELEVANT PROFILES AND TWEETS FUNCTIONS:
+
+getInDegreeProfiles <-function(data){
+  rt_df <- result[, c("screen_name","retweet_screen_name" )]
+  #transform empty to NA:
+  rt_df$retweet_screen_name[(rt_df$retweet_screen_name=="")] <- NA
+  rt_df$screen_name[(rt_df$screen_name=="")] <- NA
+  # Remove rows with missing values
+  rt_df_clean <- rt_df[complete.cases(rt_df), ]
+  
+  # Convert to matrix
+  matrx <- as.matrix(rt_df_clean)
+  # Create the retweet network
+  
+  nw_rtweet <- graph_from_edgelist(el = matrx, directed = TRUE)
+  
+  # Calculate the in-degree scores
+  in_degree <- degree(nw_rtweet, mode = c("in"))
+  # Sort the users in descending order of in-degree scores
+  in_degree_sort <- sort(in_degree, decreasing = TRUE)
+  
+  # View the top 5 users
+  return(in_degree_sort[1:25])
+  
+}
+
+getProfilesTweets<-function(result,profiles,d)
+{
+  last_result = data.frame()
+  for (p in names(topProfiles)) {
+    newdata <- result[result$retweet_screen_name == p,]
+    newdata$indegree<-topProfiles[p]
+    newdata<-newdata[which.max(newdata$retweet_retweet_count),] #take only one, could be duplicated.
+
+   # newdata<-cleanText(newdata)
+    #print(newdata)
+    
+    last_result <- rbind(newdata,last_result)
+  }
+  
+  last_result <- transformFields(last_result)
+  
+  
+  saveCSV(last_result, paste("daily",substr(d, 3, 7)))
+  
+  return (last_result)
+    
+}
+```
+
+```{r chunck6}
+
+#VERBA FUNCTIONS:
+
+getVerbaTranscription<- function(start_date, end_date){
+  verba_content = data.frame() #empty dataframe to add all content.
+  #programs list Verba rest api endpoint
+  verba_url <-"https://verba.civio.es/api/fetchProgrammeList" 
+  verba_data <- fromJSON(verba_url) #get JSON from URL
+  verba_data$date<-as.Date(verba_data$date, "%Y-%m-%d") #convert date column to Date type
+  #filter to get only program between start_date and end_date
+  verba_data <- subset(verba_data, date >= start_date & date <= end_date) 
+  
+  #get content for each program and lemmatizate the text to calculate the sentiment polarity:
+  verba_data$polarity <- unlist(mapply(getVerbaProgramContent,verba_data$id,verba_data$date))
+  saveCSV(verba_data,"verba_data") #save into CSV
+}
+
+getVerbaProgramContent <- function(program_id, program_date){
+  #program content Verba rest api endpoint
+  program_url <-"https://verba.civio.es/api/fetchProgrammeTranscription?programme_id="
+  program_data <- fromJSON(paste(program_url, program_id, sep = "")) #get JSON from built URL
+  program_data$text.clean <- parseText(program_data$content) #clean text
+  program_data$text.lem <-unlist(lapply(program_data$text.clean, lemmatizateText)) #lemmatize content
+  program_data <- getSentimentSyuzhet(program_data) #get sentiment of content
+  
+  #add to dataframe the 100 most used words in the program
+  verba_topics_100 <<-rbind(getTopNTopics(program_data$text.clean, format(program_date, "%Y-%m-%d"), "verba"), verba_topics_100)
+  verba_topics_100_lem <<-rbind(getTopNTopics(program_data$text.lem, format(program_date, "%Y-%m-%d"), "verba"), verba_topics_100)
+  
+  return(mean(program_data$polarity)) #return avegare polarity for a program.
+}
+
+```
+
+
+```{r chunck7}
+
+#PRINCIPAL EXECUTION CODE
+
+#Get all directories (days) of the month and get and transform relevant tweets:
+# Bind and delete duplicates for each day
+# Get top profiles per day
+# Get tweets from those top profiles, format fields and calculate sentiment.
+# Save in separate CSV
+
+time_init<-Sys.time()
+directories <- list.dirs('.', recursive=FALSE)
+
+
+for (d in directories)
+{
+    print(paste("Processing...",d))
+    result<-bindAndDeleteDuplicatedTweets(d)
+    topProfiles<-getInDegreeProfiles(result)
+    print(topProfiles)
+
+    final_result<-getProfilesTweets(result, topProfiles,d)
+
+
+    #add to global twitter data dataframe:
+    #global_data<<-rbind(final_result,global_data)
+
+    #get date to add into topics dataframe:
+    file_date<-final_result[which.max(final_result$created_at),]$created_at
+    print(file_date)
+
+    #get topics from that day:
+    twitter_topics_100<<-rbind(getTopNTopics(final_result$text.clean,format(file_date, "%Y-%m-%d"), "twitter"),twitter_topics_100);
+    twitter_topics_100_lem<<-rbind(getTopNTopics(final_result$text.lem,format(file_date, "%Y-%m-%d"), "twitter"),twitter_topics_100);
+
+}
+
+#saveCSV(global_data,"twitter_data")
+#get all daily relevant tweets together in one file:
+bindFinalTwitterResult()
+
+#get Telediario information:
+getVerbaTranscription("2020-03-15","2020-05-24")
+
+bindVerbaTwitterSentiment()
+
+#save all topics found (twitter and verba together)
+#saveCSV(twitter_topics_100, "twitter_topics_100")
+
+#twitter_topics_15 <- top_n(twitter_topics_100, n = 15, wt = twitter_topics_100$date)
+twitter_topics_15<- twitter_topics_100[, .SD[order(-count)][1:15,], by=date]
+print(twitter_topics_15)
+#saveCSV(twitter_topics_15, "twitter_topics_15")
+#save all topics found (twitter and verba together)
+#saveCSV(verba_topics_100, "verba_topics_100")
+verba_topics_15 <- verba_topics_100[, .SD[order(-count)][1:15,], by=date]
+all_topics_15 <- rbind(twitter_topics_15, verba_topics_15)
+
+saveCSV(all_topics_15, "topics_15")
+
+#merge verba and twitter topics into one dataframe and save:
+all_topics <- rbind(twitter_topics_100, verba_topics_100)
+
+saveCSV(all_topics, "topics_100")
+
+twitter_topics_15_lem<- twitter_topics_100_lem[, .SD[order(-count)][1:15,], by=date]
+
+verba_topics_15_lem <- verba_topics_100_lem[, .SD[order(-count)][1:15,], by=date]
+all_topics_15_lem <- rbind(twitter_topics_15_lem, verba_topics_15_lem)
+
+saveCSV(all_topics_15_lem, "topics_15_lem")
+
+#merge verba and twitter topics into one dataframe and save:
+all_topics_lem <- rbind(twitter_topics_100_lem, verba_topics_100_lem)
+
+saveCSV(all_topics_lem, "topics_100_lem")
+
+
+
+#show execution time
+time_end<-Sys.time()
+print(time_end - time_init)
+
+
+```
+
+
+
+
+
+
+
+
+ 

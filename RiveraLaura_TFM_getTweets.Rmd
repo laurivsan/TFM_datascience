@@ -1,0 +1,123 @@
+---
+title: "Coronavirus"
+author: "Laura Rivera Sanchez (laurivsan)"
+output:
+  html_document:
+    toc: yes
+  word_document:
+    toc: yes
+  pdf_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load_libraries, include=FALSE}
+library(knitr)
+#Install and Load R packages
+#install.packages("rtweet")
+
+library(httpuv)
+library(rtweet)
+library(dplyr)
+
+```
+
+
+# 0 Lectura de Twitter
+
+
+```{r chunck1.1}
+api_key<-"API_KEY"
+api_secret_key<-"API_SECRET_KEY"
+access_token_key<-"TOKEN_KEY"
+access_token_secret<- "TOKEN_SECRET"
+
+## authenticate via web browser
+token <- create_token(
+  app = "APP_NAME",
+  consumer_key = api_key,
+  consumer_secret = api_secret_key,
+  access_token = access_token_key,
+  access_secret = access_token_secret)
+
+```
+
+
+```{r chunck1.2}
+
+getGeoTweets<- function( date_ini, date_end){
+  loc <- "40.129705,-8.2134866,320mi"
+  
+  tweet_df <- search_tweets(
+                          n = 400000,
+                          since=date_ini,
+                          until=date_end,
+                          geocode = loc,
+                          retryonratelimit = TRUE,
+                          verbose = TRUE,
+            include_rts = TRUE)
+
+
+  file<-paste("geotweets", date_ini,".csv")
+  save_as_csv(tweet_df, file, prepend_ids = TRUE, na = "", fileEncoding = "UTF-8")
+
+}
+
+getGeoTweetsParam<- function( date_ini, date_end, param){
+  loc <- "40.129705,-8.2134866,320mi"
+  
+  tweet_df <- search_tweets(
+                          param,
+                          n = 250000,
+                          since=date_ini,
+                          until=date_end,
+                          geocode = loc,
+                          retryonratelimit = TRUE,
+                          verbose = TRUE,
+            include_rts = TRUE)
+
+
+  file<-paste("geotweets",param, date_ini,".csv")
+  save_as_csv(tweet_df, file, prepend_ids = TRUE, na = "", fileEncoding = "UTF-8")
+
+}
+
+
+
+getTweets<- function(word, date_ini, date_end){
+  tweet_df <- search_tweets(
+                          word,
+                          n = 250000,
+                          since=date_ini,
+                          until=date_end,
+                          retryonratelimit = TRUE,
+                          verbose = TRUE,
+            include_rts = TRUE)
+
+
+  file<-paste("tweets", date_ini,word,"_250.csv")
+  save_as_csv(tweet_df, file, prepend_ids = TRUE, na = "", fileEncoding = "UTF-8")
+}
+
+
+```
+
+
+```{r chunck1.3}
+
+#Some examples of usage:
+getGeoTweetsParam("2020-03-25","2020-03-26","#coronavirus")
+
+getTweets("#quedateencasa","2020-03-28","2020-03-29")
+
+getGeoTweets("2020-03-31","2020-04-01")
+
+```
+
+
+
+
+ 
